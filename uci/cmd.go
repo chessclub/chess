@@ -327,6 +327,130 @@ func (CmdGo) ProcessResponse(e *Engine) error {
 	return nil
 }
 
+// CmdPgnSpy corresponds to the "go infinite" command, which will stop once certain criteria are met
+// TODO: long term this should probably just be a go infinite command with a chan of parsed log
+//
+//	lines, rather than fully implemented here, but we have limited time
+type CmdPgnSpy struct {
+	SearchMoves []*chess.Move
+	SearchDepth int
+	MinTime     time.Duration
+	MaxTime     time.Duration
+}
+
+func (cmd CmdPgnSpy) String() string {
+	a := []string{"go"}
+
+	a = append(a, "infinite")
+
+	if len(cmd.SearchMoves) > 0 {
+		a = append(a, "searchmoves")
+		for _, m := range cmd.SearchMoves {
+			mStr := chess.UCINotation{}.Encode(nil, m)
+			a = append(a, mStr)
+		}
+	}
+	return strings.Join(a, " ")
+}
+
+// ProcessResponse implements the Cmd interface
+// The PgnSpy version of this command will use `go infinite`, it monitors the lines it sees and stops when
+// various conditions are met.
+//
+// This code nearly identical to the PgnSpy code, except it does parsing in the manner of this library instead
+// of the original C++ code.
+func (cmd CmdPgnSpy) ProcessResponse(e *Engine) error {
+	beingMated := false
+	engineCouldBeStuck := true // when being mated by force or drawn by force, sometimes the engine gets stuck
+	engineStopped := false
+
+	scanner := bufio.NewScanner(e.out)
+	results := SearchResults{}
+	for scanner.Scan() {
+		text := e.readLine(scanner)
+
+		if strings.HasPrefix(text, "info") && strings.Contains(text, "multipv") {
+			info := &Info{}
+			err := info.UnmarshalText([]byte(text))
+			if err == nil {
+				results.Infos = append(results.Infos, *info)
+			}
+			reachedDepth := false
+			extractInfo(info, cmd, &engineStopped, &reachedDepth, &beingMated, &engineCouldBeStuck)
+			if (reachedDepth || beingMated) && !engineStopped {
+				engineStopped = true
+				e.stop()
+			}
+		} else if strings.HasPrefix(text, "bestmove") {
+			// TODO: this should probably be its own struct with UnmarshalText function
+			parts := strings.Split(text, " ")
+			if len(parts) <= 1 {
+				return errors.New("best move not found " + text)
+			}
+			bestMove, err := chess.UCINotation{}.Decode(nil, parts[1])
+			if err != nil {
+				return err
+			}
+			results.BestMove = bestMove
+			if len(parts) >= 4 {
+				ponderMove, err := chess.UCINotation{}.Decode(nil, parts[3])
+				if err != nil {
+					return err
+				}
+				results.Ponder = ponderMove
+			}
+			break
+		} else {
+			continue // Skip all of the rest ofthe logged lines
+		}
+
+	}
+	e.results = results
+	return nil
+}
+
+func extractInfo(info *Info, cmd CmdPgnSpy, engineStopped, reachedDepth, beingMated, engineCouldBeStuck *bool) error {
+	*reachedDepth = false
+	multipv := info.Multipv
+	if multipv != 1 {
+		// if we're stuck, we only ever report one variation
+		*engineCouldBeStuck = false
+	}
+	mate := info.Score.Mate
+	if multipv == 1 && mate < 0 {
+		*beingMated = true
+	}
+	depth := info.Depth
+	timeToFindPV := info.Time
+	// if we've at depth 50 and never been given another
+	// variation, assume engine's stuck and bail out
+	engineStuck := *engineCouldBeStuck && depth > 50
+	oneSecond := time.Duration(time.Second)
+	if !engineStuck && depth > 30 && timeToFindPV < oneSecond {
+		// if we reach depth 30 in under a second, we probably have
+		// some very forced lines, which tends to mean we get stuck
+		engineStuck = true
+	}
+
+	if !*engineStopped {
+		// if the engine hasn't been stopped, don't save results until the right
+		// time/depth settings are reached if the engine has been stopped, save
+		// results even if this line hasn't reached the right depth
+		if timeToFindPV < cmd.MinTime && !*beingMated && !engineStuck {
+			// keep searching at least until we hit min time - unless
+			// we're mated by force or engine's stuck
+			return nil
+		}
+		if depth < cmd.SearchDepth && timeToFindPV <= cmd.MaxTime && !*beingMated && !engineStuck {
+			// keep searching until we hit either search depth or max time
+			// - unless we're mated by force or engine's stuck
+			return nil
+		}
+	}
+	*reachedDepth = true
+	return nil
+}
+
 func parseIDLine(s string) (string, string, error) {
 	if !strings.HasPrefix(s, "id") {
 		return "", "", errors.New("uci: invalid id line")
