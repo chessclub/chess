@@ -172,6 +172,16 @@ func (e *Engine) processCommand(cmd Cmd) error {
 	return nil
 }
 
+func (e *Engine) stop() error {
+	if e.debug {
+		e.logger.Println("stop")
+	}
+	if _, err := fmt.Fprintln(e.in, "stop"); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (e *Engine) readLine(scanner *bufio.Scanner) string {
 	s := scanner.Text()
 	if e.debug {
