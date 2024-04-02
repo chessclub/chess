@@ -339,9 +339,7 @@ type CmdPgnSpy struct {
 }
 
 func (cmd CmdPgnSpy) String() string {
-	a := []string{"go"}
-
-	a = append(a, "infinite")
+	a := []string{"go", "infinite"}
 
 	if len(cmd.SearchMoves) > 0 {
 		a = append(a, "searchmoves")
@@ -400,10 +398,7 @@ func (cmd CmdPgnSpy) ProcessResponse(e *Engine) error {
 				results.Ponder = ponderMove
 			}
 			break
-		} else {
-			continue // Skip all of the rest ofthe logged lines
 		}
-
 	}
 	e.results = results
 	return nil
