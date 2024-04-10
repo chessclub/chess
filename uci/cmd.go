@@ -361,11 +361,17 @@ func (cmd CmdPgnSpy) ProcessResponse(e *Engine) error {
 	beingMated := false
 	engineCouldBeStuck := true // when being mated by force or drawn by force, sometimes the engine gets stuck
 	engineStopped := false
+	start := time.Now()
 
 	scanner := bufio.NewScanner(e.out)
 	results := SearchResults{}
 	for scanner.Scan() {
 		text := e.readLine(scanner)
+		timeSpent := time.Since(start)
+
+		if timeSpent > cmd.MaxTime {
+			e.stop()
+		}
 
 		if strings.HasPrefix(text, "info") && strings.Contains(text, "multipv") {
 			info := &Info{}
